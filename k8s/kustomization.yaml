@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: devops-coffee
+
+resources:
+  - namespace.yaml
+  - redis.yaml
+  - web.yaml
+
+# The image tag below is updated automatically by GitHub Actions on every push.
+# Argo CD sees the change in Git and rolls out the new version.
+images:
+  - name: devops-coffee
+    newName: ghcr.io/devops-with-umesh/devops-coffee
+    newTag: latest

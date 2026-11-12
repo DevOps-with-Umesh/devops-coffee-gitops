@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ shop }}</title>
+<style>
+  :root { --bg:#16110e; --card:#241b16; --line:#3a2d25; --text:#f5ece4; --muted:#b9a99b; --accent:#d9a066; --green:#1f9d4a; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+           padding:20px 32px; border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:28px; }
+  .badges { display:flex; gap:8px; flex-wrap:wrap; }
+  .badge { background:var(--card); border:1px solid var(--line); padding:6px 12px; border-radius:99px; font-size:13px; color:var(--muted); }
+  .badge b { color:var(--text); }
+  .badge.live b { color:#4ade80; }
+  main { display:grid; grid-template-columns:1.3fr 1fr; gap:24px; padding:24px 32px; max-width:1200px; margin:0 auto; }
+  @media (max-width:860px) { main { grid-template-columns:1fr; padding:16px; } header { padding:16px; } }
+  section { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:22px; }
+  h2 { margin:0 0 14px; font-size:18px; color:var(--accent); text-transform:uppercase; letter-spacing:.08em; }
+  .menu { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; }
+  .item { background:var(--bg); border:1px solid var(--line); border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:6px; }
+  .item .emoji { font-size:34px; }
+  .item .name { font-weight:600; }
+  .item .price { color:var(--accent); font-weight:700; }
+  button { margin-top:6px; border:0; border-radius:10px; padding:10px; font-weight:700; cursor:pointer;
+           background:var(--accent); color:#1b120c; font-size:14px; }
+  button:active { transform:scale(.97); }
+  .stats { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
+  .stat { background:var(--bg); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  .stat .num { font-size:30px; font-weight:800; }
+  .stat .lbl { color:var(--muted); font-size:13px; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { display:flex; gap:10px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  li .meta { margin-left:auto; color:var(--muted); font-size:12px; text-align:right; }
+  li.new { animation:flash 1.2s ease; }
+  @keyframes flash { from { background:#3b2a1a; } to { background:transparent; } }
+  .empty { color:var(--muted); padding:12px 0; }
+  .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--green); color:#fff;
+           padding:10px 18px; border-radius:99px; font-weight:600; opacity:0; transition:opacity .3s; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>☕ {{ shop }}</h1>
+  <div class="badges">
+    <span class="badge live"><b>● Live</b></span>
+    <span class="badge">Version <b>{{ version }}</b></span>
+    <span class="badge">Pod <b id="pod">{{ pod }}</b></span>
+    <span class="badge">Deployed by <b>Argo CD</b></span>
+  </div>
+</header>
+<main>
+  <section>
+    <h2>Menu</h2>
+    <div class="menu">
+      {% for item in menu %}
+      <div class="item">
+        <span class="emoji">{{ item.emoji }}</span>
+        <span class="name">{{ item.name }}</span>
+        <span class="price">${{ "%.2f"|format(item.price) }}</span>
+        <button onclick="order('{{ item.id }}')">Order</button>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  <section>
+    <h2>Live orders</h2>
+    <div class="stats">
+      <div class="stat"><div class="num" id="total">0</div><div class="lbl">orders today</div></div>
+      <div class="stat"><div class="num" id="revenue">$0.00</div><div class="lbl">revenue</div></div>
+    </div>
+    <ul id="orders"><li class="empty">No orders yet. Be the first! ☕</li></ul>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+  let lastTop = 0;
+  async function refresh() {
+    try {
+      const r = await fetch('/api/orders');
+      const d = await r.json();
+      document.getElementById('total').textContent = d.total;
+      document.getElementById('revenue').textContent = '$' + d.revenue.toFixed(2);
+      const ul = document.getElementById('orders');
+      if (!d.recent.length) return;
+      ul.innerHTML = d.recent.map(o =>
+        `<li class="${o.id > lastTop ? 'new' : ''}"><span style="font-size:22px">${o.emoji}</span>
+         <span>#${o.id} ${o.item}</span>
+         <span class="meta">${o.time}<br>${o.pod}</span></li>`).join('');
+      lastTop = d.recent[0].id;
+    } catch (e) { /* app restarting: try again next tick */ }
+  }
+  async function order(id) {
+    const r = await fetch('/api/orders', {method:'POST', headers:{'Content-Type':'application/json'},
+                                          body: JSON.stringify({item:id})});
+    const o = await r.json();
+    const t = document.getElementById('toast');
+    t.textContent = r.ok ? `Order #${o.id} placed: ${o.item}` : 'Could not place order';
+    t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800);
+    refresh();
+  }
+  refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>
