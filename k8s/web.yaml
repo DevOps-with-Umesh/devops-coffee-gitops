@@ -21,6 +21,9 @@ spec:
         app.kubernetes.io/name: web
         app.kubernetes.io/part-of: devops-coffee
     spec:
+      # Don't inject docker-link style env vars (e.g. REDIS_PORT=tcp://...) for
+      # Services in the namespace; they collide with the app's REDIS_PORT setting.
+      enableServiceLinks: false
       containers:
         - name: web
           image: devops-coffee   # real image + tag are set in kustomization.yaml (updated by CI)
@@ -29,6 +32,8 @@ spec:
           env:
             - name: REDIS_HOST
               value: redis
+            - name: REDIS_PORT
+              value: "6379"
             - name: SHOP_NAME
               value: DevOps Coffee
           readinessProbe:
