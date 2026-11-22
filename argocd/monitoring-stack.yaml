@@ -1,0 +1,47 @@
+# Part 2: installs Prometheus + Grafana + Alertmanager (kube-prometheus-stack Helm chart) with Argo CD.
+# No helm command needed: Argo CD renders the chart and keeps it in sync.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-stack
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 93.6.1
+    helm:
+      releaseName: monitoring
+      valuesObject:
+        fullnameOverride: monitoring
+        prometheus:
+          prometheusSpec:
+            # pick up ServiceMonitors and rules from every namespace (not only this Helm release)
+            serviceMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+            retention: 2d
+        grafana:
+          adminPassword: devops-coffee   # demo only: use a Secret in real life
+        # Docker Desktop has no separate control-plane endpoints to scrape: skip them
+        kubeEtcd:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeControllerManager:
+          enabled: false
+        kubeProxy:
+          enabled: false
+        prometheus-node-exporter:
+          hostRootFsMount:
+            enabled: false   # Docker Desktop does not allow this mount
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true   # the chart's CRDs are too big for normal kubectl apply

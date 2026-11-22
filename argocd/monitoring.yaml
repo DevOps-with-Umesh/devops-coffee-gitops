@@ -1,0 +1,27 @@
+# Part 2: deploys monitoring/ (ServiceMonitor, alert rules, Grafana dashboard) from this repo.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: devops-coffee-monitoring
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/DevOps-with-Umesh/devops-coffee-gitops.git
+    targetRevision: main
+    path: monitoring
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devops-coffee
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - SkipDryRunOnMissingResource=true   # wait for the monitoring-stack CRDs on the first sync
+    retry:
+      limit: 10
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 5m

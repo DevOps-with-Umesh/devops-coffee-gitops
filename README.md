@@ -207,6 +207,59 @@ No new build needed, and the rollback is recorded in Git history.
 
 ---
 
+## 📈 PART 2: Monitoring with Prometheus + Grafana
+
+The app now exposes **metrics** at `/metrics`. Prometheus collects them every 15 s, Grafana draws them,
+and alert rules tell you when something breaks.
+
+| Metric | What it tells you |
+|---|---|
+| `coffee_orders_total{item}` | orders per drink (business metric) |
+| `coffee_revenue_dollars_total` | money earned |
+| `http_requests_total{method,endpoint,status}` | traffic and errors |
+| `http_request_duration_seconds` | response time (histogram → p50 / p95) |
+
+New files:
+```
+app/gunicorn.conf.py          ← merges metrics from both gunicorn workers
+monitoring/servicemonitor.yaml← "scrape /metrics on the web pods"
+monitoring/alerts.yaml        ← CoffeeWebDown, CoffeeHighErrorRate, CoffeeSlowResponses
+monitoring/dashboard.yaml     ← ☕ DevOps Coffee Grafana dashboard (auto-loaded)
+argocd/monitoring-stack.yaml  ← Argo CD installs kube-prometheus-stack (Prometheus + Grafana + Alertmanager)
+argocd/monitoring.yaml        ← Argo CD deploys monitoring/ from this repo
+```
+
+**P1.** Release the app with metrics: push the change to `app/` (VERSION `1.1.0`). CI builds it and Argo CD rolls it out,
+exactly like STEP 7.
+
+**P2.** Install monitoring (no Helm needed, Argo CD does it):
+```bash
+./scripts/install-monitoring.sh
+```
+Give Docker Desktop at least **6 GB memory** (Settings → Resources).
+
+**P3.** Open the UIs, each in its own Terminal tab:
+```bash
+./scripts/grafana-ui.sh       # http://localhost:3000  admin / devops-coffee
+./scripts/prometheus-ui.sh    # http://localhost:9090
+./scripts/open-app.sh         # http://localhost:8090
+./scripts/customers.sh        # traffic for the graphs
+```
+- Prometheus → **Status → Targets**: `serviceMonitor/devops-coffee/web` shows 2 targets **UP**.
+- Grafana → **Dashboards → ☕ DevOps Coffee**: orders, revenue, error rate, pods, latency, memory.
+
+**P4.** Break it on purpose and watch the alert:
+```bash
+./scripts/chaos-redis.sh            # Redis down → orders fail with 503
+```
+Grafana's error rate turns red; after ~2 minutes Prometheus → **Alerts** shows **CoffeeHighErrorRate: FIRING**.
+Fix it:
+```bash
+./scripts/chaos-redis.sh restore    # self-heal back on → Argo CD restores Redis
+```
+
+---
+
 ## 🛟 Troubleshooting
 
 | Problem | Fix |

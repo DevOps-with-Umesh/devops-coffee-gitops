@@ -1,0 +1,43 @@
+# Alert rules. Prometheus checks them all the time; firing alerts go to Alertmanager.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: devops-coffee-alerts
+  labels:
+    app.kubernetes.io/part-of: devops-coffee
+spec:
+  groups:
+    - name: devops-coffee
+      rules:
+        - alert: CoffeeWebDown
+          expr: absent(up{namespace="devops-coffee", service="web"} == 1)
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "DevOps Coffee web app is down"
+            description: "No web pod has answered Prometheus for 1 minute."
+
+        - alert: CoffeeHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{namespace="devops-coffee", status=~"5.."}[2m]))
+              /
+            sum(rate(http_requests_total{namespace="devops-coffee"}[2m])) > 0.05
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "More than 5% of requests are failing"
+            description: "{{ $value | humanizePercentage }} of requests return 5xx errors."
+
+        - alert: CoffeeSlowResponses
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(http_request_duration_seconds_bucket{namespace="devops-coffee"}[5m]))
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Slow responses"
+            description: "95% of requests are slower than {{ $value | humanizeDuration }}."

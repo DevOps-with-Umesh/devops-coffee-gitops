@@ -1,11 +1,15 @@
-"""DevOps Coffee: a small coffee-ordering web app (Flask + Redis) for GitOps demos."""
+"""DevOps Coffee: a small coffee-ordering web app (Flask + Redis) for GitOps demos.
+
+Part 2 adds Prometheus metrics at /metrics (orders, revenue, requests, latency)."""
 import json
 import os
 import socket
 import time
 
 import redis
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, g, jsonify, render_template, request
+from prometheus_client import (CONTENT_TYPE_LATEST, REGISTRY, CollectorRegistry, Counter,
+                               Histogram, generate_latest, multiprocess)
 
 app = Flask(__name__)
 
@@ -23,6 +27,15 @@ MENU = [
 ]
 MENU_BY_ID = {item["id"]: item for item in MENU}
 
+# --- Prometheus metrics -------------------------------------------------------
+# Business metrics: what the coffee shop cares about.
+ORDERS = Counter("coffee_orders_total", "Coffee orders placed", ["item"])
+REVENUE = Counter("coffee_revenue_dollars_total", "Money earned from orders, in dollars")
+# Technical metrics: what the DevOps engineer cares about.
+REQUESTS = Counter("http_requests_total", "HTTP requests handled", ["method", "endpoint", "status"])
+LATENCY = Histogram("http_request_duration_seconds", "How long requests take", ["endpoint"])
+NOT_TRACKED = {"/metrics", "/healthz", "/readyz"}  # probes and scrapes would only add noise
+
 db = redis.Redis(
     host=os.environ.get("REDIS_HOST", "redis"),
     port=int(os.environ.get("REDIS_PORT", "6379")),
@@ -30,6 +43,25 @@ db = redis.Redis(
     socket_timeout=2,
     socket_connect_timeout=2,
 )
+
+
+@app.before_request
+def start_timer():
+    g.start = time.perf_counter()
+
+
+@app.after_request
+def record_request(response):
+    endpoint = request.url_rule.rule if request.url_rule else "unknown"
+    if endpoint not in NOT_TRACKED and "start" in g:
+        REQUESTS.labels(request.method, endpoint, str(response.status_code)).inc()
+        LATENCY.labels(endpoint).observe(time.perf_counter() - g.start)
+    return response
+
+
+@app.errorhandler(redis.RedisError)
+def database_down(_error):
+    return jsonify(error="database unavailable"), 503
 
 
 @app.get("/")
@@ -48,6 +80,8 @@ def place_order():
     db.lpush("orders:recent", json.dumps(order))
     db.ltrim("orders:recent", 0, 9)
     db.incrbyfloat("orders:revenue", item["price"])
+    ORDERS.labels(item["id"]).inc()
+    REVENUE.inc(item["price"])
     return jsonify(order), 201
 
 
@@ -73,6 +107,17 @@ def readyz():
         return "ready", 200
     except redis.RedisError:
         return "redis unavailable", 503
+
+
+@app.get("/metrics")
+def metrics():
+    """Prometheus scrapes this. With gunicorn (several worker processes) we merge every worker's numbers."""
+    if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+    else:
+        registry = REGISTRY
+    return Response(generate_latest(registry), mimetype=CONTENT_TYPE_LATEST)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,15 @@
+# Tells Prometheus: "scrape /metrics on every pod behind the web Service, every 15 seconds".
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/part-of: devops-coffee
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
