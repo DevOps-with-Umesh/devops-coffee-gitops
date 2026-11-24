@@ -260,6 +260,36 @@ Fix it:
 
 ---
 
+## 🔐 PART 3: DevSecOps, security gates in the pipeline
+
+Nothing is released unless every security check passes:
+
+| Gate | Tool | Fails the pipeline when… |
+|---|---|---|
+| 🔑 Secret scan | Gitleaks | a password, key or token is anywhere in the Git history |
+| 🧾 Config scan | Trivy | the Dockerfile or Kubernetes files have a HIGH/CRITICAL misconfiguration |
+| 🐳 Image scan | Trivy | the image has a HIGH/CRITICAL vulnerability that has a fix |
+
+Also in Part 3:
+- **Pull requests are scanned but never released.** Only `main` builds and deploys.
+- **Every GitHub Action is pinned to a full commit SHA** (a tag like `@v4` can be moved by an attacker).
+- **Scanners are downloaded with a checksum check** (pinned versions, no third-party scanner actions).
+- **SBOM:** every run uploads `sbom.cdx.json` (CycloneDX list of everything inside the image) under *Artifacts*.
+- **Security tab:** config findings show up under *Security → Code scanning* (needs code scanning turned on).
+- **Locked-down pods:** non-root user, read-only filesystem, all Linux capabilities dropped,
+  no privilege escalation, `RuntimeDefault` seccomp. Only `/tmp` (web) and `/data` (Redis) are writable.
+- **Dependabot** (`.github/dependabot.yml`) opens weekly pull requests for actions, pip packages and the base image.
+
+Run the same scans on your Mac before you push:
+```bash
+brew install trivy gitleaks
+gitleaks git --redact .
+trivy config --severity HIGH,CRITICAL .
+docker build -t devops-coffee:scan app && trivy image --severity HIGH,CRITICAL --ignore-unfixed devops-coffee:scan
+```
+
+---
+
 ## 🛟 Troubleshooting
 
 | Problem | Fix |

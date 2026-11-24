@@ -1,0 +1,16 @@
+# Part 3 (DevSecOps): keep dependencies patched. Dependabot opens a pull request when a new
+# version is out, and the CI security gates scan that pull request before anyone merges it.
+version: 2
+updates:
+  - package-ecosystem: github-actions   # updates the pinned commit SHAs in .github/workflows
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip              # app/requirements.txt
+    directory: /app
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker           # the python base image in app/Dockerfile
+    directory: /app
+    schedule:
+      interval: weekly
