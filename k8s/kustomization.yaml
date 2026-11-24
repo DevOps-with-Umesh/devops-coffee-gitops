@@ -13,4 +13,4 @@ resources:
 images:
   - name: devops-coffee
     newName: ghcr.io/devops-with-umesh/devops-coffee
-    newTag: "912820e"
+    newTag: "4eda224"
