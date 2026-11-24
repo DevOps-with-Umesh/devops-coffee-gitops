@@ -16,9 +16,21 @@ spec:
         app.kubernetes.io/name: redis
         app.kubernetes.io/part-of: devops-coffee
     spec:
+      securityContext:            # Part 3 (DevSecOps): the "redis" user from the image, never root
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: redis
           image: redis:7.4-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 6379
           readinessProbe:
@@ -31,6 +43,12 @@ spec:
               memory: 64Mi
             limits:
               memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data   # Redis saves its snapshot here
+      volumes:
+        - name: data
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

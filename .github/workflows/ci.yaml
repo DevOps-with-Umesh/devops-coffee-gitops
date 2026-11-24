@@ -1,6 +1,10 @@
-# CI pipeline: test → build image → push to GHCR → update the image tag in Git.
+# CI pipeline: test + security scans → build image → push to GHCR → update the image tag in Git.
 # Argo CD watches k8s/ in this repo and deploys the new tag by itself (that's the CD part).
-name: CI – build & release
+#
+# Part 3 (DevSecOps): nothing is released unless every security gate passes:
+#   🔑 secret scan (Gitleaks) · 🧾 config scan (Trivy: Dockerfile + Kubernetes) · 🐳 image scan (Trivy: CVEs)
+# Every action is pinned to a full commit SHA, and the scanners are downloaded with checksum checks.
+name: CI – test, scan & release
 
 on:
   push:
@@ -8,11 +12,20 @@ on:
     paths:
       - "app/**"
       - ".github/workflows/ci.yaml"
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: release
+  group: ci-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  TRIVY_VERSION: "0.76.2"
+  GITLEAKS_VERSION: "8.30.1"
 
 jobs:
   test:
@@ -21,21 +34,83 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt pytest
       - run: python -m pytest -v tests
 
+  secret-scan:
+    name: "🔑 Secret scan (Gitleaks)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # scan the whole Git history, not only the last commit
+      - name: Install Gitleaks (pinned version + checksum check)
+        run: |
+          V="${GITLEAKS_VERSION}"; cd /tmp
+          curl -sSfLO "https://github.com/gitleaks/gitleaks/releases/download/v${V}/gitleaks_${V}_linux_x64.tar.gz"
+          curl -sSfLO "https://github.com/gitleaks/gitleaks/releases/download/v${V}/gitleaks_${V}_checksums.txt"
+          grep " gitleaks_${V}_linux_x64.tar.gz$" "gitleaks_${V}_checksums.txt" | sha256sum -c -
+          tar xzf "gitleaks_${V}_linux_x64.tar.gz" gitleaks && sudo mv gitleaks /usr/local/bin/
+      - name: Scan for leaked passwords, keys and tokens
+        run: gitleaks git --redact --verbose .
+
+  config-scan:
+    name: "🧾 Config scan (Trivy: Dockerfile + Kubernetes)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # show findings in the GitHub "Security" tab
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - &install-trivy
+        name: Install Trivy (pinned version + checksum check)
+        run: |
+          V="${TRIVY_VERSION}"; cd /tmp
+          curl -sSfLO "https://github.com/aquasecurity/trivy/releases/download/v${V}/trivy_${V}_Linux-64bit.tar.gz"
+          curl -sSfLO "https://github.com/aquasecurity/trivy/releases/download/v${V}/trivy_${V}_checksums.txt"
+          grep " trivy_${V}_Linux-64bit.tar.gz$" "trivy_${V}_checksums.txt" | sha256sum -c -
+          tar xzf "trivy_${V}_Linux-64bit.tar.gz" trivy && sudo mv trivy /usr/local/bin/
+      - name: Report for the Security tab
+        run: trivy config --format sarif --output trivy-config.sarif .
+      - uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        if: always()
+        continue-on-error: true   # the Security tab needs code scanning enabled on the repo
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+      - name: "Gate: fail on HIGH or CRITICAL misconfigurations"
+        run: trivy config --severity HIGH,CRITICAL --exit-code 1 .
+
+  image-scan:
+    name: "🐳 Image scan (Trivy: CVEs + SBOM)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - *install-trivy
+      - name: Build the image locally (not pushed)
+        run: docker build -t devops-coffee:scan app
+      - name: SBOM (list of everything inside the image)
+        run: trivy image --format cyclonedx --output sbom.cdx.json devops-coffee:scan
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: sbom.cdx.json
+      - name: "Gate: fail on HIGH or CRITICAL vulnerabilities that have a fix"
+        run: trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 devops-coffee:scan
+
   build-and-release:
-    needs: test
+    needs: [test, secret-scan, config-scan, image-scan]   # every gate must be green
+    if: github.event_name != 'pull_request'                # PRs are scanned, never released
     runs-on: ubuntu-latest
     permissions:
       contents: write   # to commit the new image tag
       packages: write   # to push the image to ghcr.io
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set image name and version
         run: |
@@ -44,17 +119,17 @@ jobs:
           echo "TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           echo "VERSION=$(cat app/VERSION)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
-      - uses: docker/setup-qemu-action@v3      # build for Apple Silicon (arm64) too
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0  (Apple Silicon / arm64 builds)
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: app
           platforms: linux/amd64,linux/arm64
